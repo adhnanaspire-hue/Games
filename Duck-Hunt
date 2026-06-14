@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<!--
+  ================================================================
+  DUCK HUNT – Hand-Gesture Edition
+  index.html – Main entry point
+
+  Dependencies loaded from CDN:
+    • MediaPipe Hands + Camera Utils (hand tracking)
+    • Press Start 2P (Google Fonts – pixel font)
+  Everything else is vanilla HTML / CSS / JS.
+  ================================================================
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Duck Hunt – Hand-Gesture Edition</title>
+
+  <!-- Pixel font (loaded by style.css via @import) -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!--
+    MediaPipe Hands CDN.
+    This must load BEFORE main.js so that window.Hands & window.Camera exist.
+    Using a pinned version for stability.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"
+          crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <!-- ══════════════════════════════════════════════════════
+       GAME CONTAINER  (everything lives inside here)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="game-container">
+
+    <!-- LAYER 0 – Webcam feed (acts as background) -->
+    <video id="webcam" autoplay playsinline muted
+           aria-label="Webcam feed used for hand tracking"></video>
+
+    <!-- LAYER 1 – Canvas for game rendering (sky, ducks, grass) -->
+    <canvas id="game-canvas" aria-label="Game canvas"></canvas>
+
+    <!-- LAYER 2 – Screen flash effect on duck hit -->
+    <div id="hit-flash" aria-hidden="true"></div>
+
+    <!-- LAYER 3 – Crosshair (positioned by JS from hand tracker) -->
+    <div id="crosshair" aria-hidden="true">
+      <span class="dot"></span>
+    </div>
+
+    <!-- LAYER 4 – HUD (score + timer + end button) -->
+    <div id="hud" role="status" aria-live="polite">
+      <div id="score-display">SCORE: 000000</div>
+      <div id="timer-display">TIME: 60</div>
+      <div id="hud-right">
+        <div id="lives-display" aria-label="Lives remaining">
+          <!-- Duck-icon lives (decorative) -->
+          <svg class="life-icon" viewBox="0 0 22 18" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="1"  y="6"  width="14" height="8"  fill="#884400"/>
+            <rect x="5"  y="8"  width="8"  height="5"  fill="#F0C060"/>
+            <rect x="11" y="3"  width="7"  height="6"  fill="#884400"/>
+            <rect x="18" y="5"  width="4"  height="2"  fill="#F8A800"/>
+            <rect x="13" y="4"  width="2"  height="2"  fill="#000"/>
+            <rect x="4"  y="1"  width="10" height="4"  fill="#228B22"/>
+          </svg>
+        </div>
+        <button id="end-btn" class="nes-btn red" aria-label="End current game">
+          ■ END
+        </button>
+      </div>
+    </div>
+
+    <!-- LAYER 5 – Tracking status badge -->
+    <div id="tracking-status" aria-live="polite">○ NO HAND</div>
+
+    <!-- LAYER 6 – Camera permission fallback message -->
+    <div id="camera-prompt" role="alert"></div>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: START
+    ════════════════════════════════════════════════════════ -->
+    <section id="start-screen" class="screen" aria-label="Start screen">
+
+      <div class="title-box">
+        <!-- Decorative duck SVG above title -->
+        <svg width="80" height="60" viewBox="0 0 80 60"
+             xmlns="http://www.w3.org/2000/svg"
+             aria-hidden="true" style="margin-bottom:12px; display:block; margin-left:auto; margin-right:auto;">
+          <!-- Body -->
+          <rect x="10" y="22" width="42" height="24" fill="#884400"/>
+          <!-- Belly -->
+          <rect x="20" y="30" width="28" height="14" fill="#F0C060"/>
+          <!-- Head -->
+          <rect x="42" y="10" width="22" height="20" fill="#884400"/>
+          <!-- Beak -->
+          <rect x="64" y="20" width="12" height="6"  fill="#F8A800"/>
+          <!-- Eye -->
+          <rect x="57" y="13" width="6"  height="6"  fill="#000"/>
+          <!-- Wing -->
+          <rect x="10" y="14" width="30" height="10" fill="#228B22"/>
+          <!-- Tail -->
+          <rect x="2"  y="18" width="14" height="16" fill="#228B22"/>
+        </svg>
+
+        <div class="title-main">🦆 DUCK HUNT</div>
+        <div class="title-sub">HAND-GESTURE EDITION</div>
+      </div>
+
+      <!-- How-to-play instructions -->
+      <div class="instructions" role="note" aria-label="Game instructions">
+        <p>Point your index finger at ducks to shoot them!</p>
+        <p>Allow camera access when prompted.</p>
+        <div class="point-list" aria-label="Duck point values">
+          <div class="point-normal">🦆 NORMAL DUCK  =  10 PTS</div>
+          <div class="point-fast">⚡ FAST DUCK    =  20 PTS</div>
+          <div class="point-golden">✨ GOLDEN DUCK  =  50 PTS</div>
+        </div>
+      </div>
+
+      <button id="play-btn" class="nes-btn" aria-label="Start the game">
+        ▶ PLAY
+      </button>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: COUNTDOWN
+    ════════════════════════════════════════════════════════ -->
+    <section id="countdown-screen" class="screen" aria-label="Countdown" aria-live="assertive">
+      <div id="countdown-number" aria-live="assertive">3</div>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: GAME OVER
+    ════════════════════════════════════════════════════════ -->
+    <section id="gameover-screen" class="screen" aria-label="Game over screen">
+      <div class="gameover-box">
+        <div class="gameover-title">GAME OVER!</div>
+        <div class="gameover-score-label">FINAL SCORE</div>
+        <div class="gameover-score-value" id="final-score">000000</div>
+        <div class="gameover-hits"    id="final-hits">0 DUCKS HIT</div>
+        <button id="restart-btn" class="nes-btn red" aria-label="Play again">
+          ↺ PLAY AGAIN
+        </button>
+      </div>
+    </section>
+
+  </div><!-- /#game-container -->
+
+  <!-- Game logic (deferred so DOM is fully parsed first) -->
+  <script src="main.js" defer></script>
+</body>
+</html>
+
+// ============================================================
+//  Duck Hunt – Hand-Gesture Edition
+//  main.js  –  Game Logic, MediaPipe Hands, Canvas Rendering
+// ============================================================
+
+'use strict';
+
+/* ── Constants ─────────────────────────────────────────────── */
+const GAME_DURATION   = 60;      // seconds per round
+const DUCK_SPAWN_BASE = 2200;    // ms between spawns (decreases over time)
+const CANVAS_BG_ALPHA = 0.68;    // sky/overlay transparency (lets webcam show)
+const GRASS_HEIGHT    = 0.14;    // fraction of canvas height
+const MISSED_DUCK_WAIT = 4500;   // ms a duck stays on screen before flying away
+
+// Duck type definitions  ── points | speed multiplier | colour hint
+const DUCK_TYPES = {
+  normal: { label: 'DUCK',   points: 10, speedMult: 1.0,  color: '#884400', wingColor: '#228B22', belly: '#F0C060' },
+  fast:   { label: 'FAST!',  points: 20, speedMult: 1.85, color: '#C04000', wingColor: '#FF6030', belly: '#FFD080' },
+  golden: { label: 'GOLDEN', points: 50, speedMult: 1.35, color: '#DAA520', wingColor: '#FFD700', belly: '#FFF8DC' },
+};
+
+const SCORE_COLORS = { normal: '#FFFFFF', fast: '#FC7460', golden: '#F8D800' };
+
+/* ── State ─────────────────────────────────────────────────── */
+let canvas, ctx;
+let gameState     = 'start';   // 'start' | 'countdown' | 'playing' | 'gameover'
+let score         = 0;
+let ducks         = [];
+let clouds        = [];
+let particles     = [];
+let scorePopups   = [];
+let spawnTimer    = null;
+let gameTimer     = null;
+let timeLeft      = GAME_DURATION;
+let totalHits     = 0;
+let countdownVal  = 3;
+
+// Hand-tracking / crosshair state
+let fingerPos     = null;  // { x, y } in canvas space, or null
+let handVisible   = false;
+
+// Audio context (created on first user gesture to satisfy autoplay policy)
+let audioCtx      = null;
+
+/* ── DOM refs ──────────────────────────────────────────────── */
+const $  = id => document.getElementById(id);
+const webcamEl       = $('webcam');
+const crosshairEl    = $('crosshair');
+const hudEl          = $('hud');
+const scoreDisplay   = $('score-display');
+const timerDisplay   = $('timer-display');
+const startScreen    = $('start-screen');
+const countdownScreen= $('countdown-screen');
+const countdownNum   = $('countdown-number');
+const gameoverScreen = $('gameover-screen');
+const finalScore     = $('final-score');
+const finalHits      = $('final-hits');
+const hitFlash       = $('hit-flash');
+const trackingStatus = $('tracking-status');
+const cameraPrompt   = $('camera-prompt');
+const endBtn         = $('end-btn');
+
+/* ──────────────────────────────────────────────────────────────
+   AUDIO – Procedurally generated via Web Audio API
+   (no external files needed)
+────────────────────────────────────────────────────────────── */
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+// Synthesise a short gunshot / hit sound
+function playShot() {
+  if (!audioCtx) return;
+  const buf  = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.12, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    // Noise burst that decays quickly
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 35) * 0.9;
+  }
+  const src  = audioCtx.createBufferSource();
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+  src.buffer = buf;
+  src.connect(gain);
+  gain.connect(audioCtx.destination);
+  src.start();
+}
+
+// Comical falling squawk
+function playHit(type) {
+  if (!audioCtx) return;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const now  = audioCtx.currentTime;
+  const freq = type === 'golden' ? 900 : type === 'fast' ? 600 : 440;
+
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(freq, now);
+  osc.frequency.exponentialRampToValueAtTime(80, now + 0.35);
+
+  gain.gain.setValueAtTime(0.25, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.4);
+}
+
+// Brief countdown beep
+function playBeep(freq = 660) {
+  if (!audioCtx) return;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const now  = audioCtx.currentTime;
+  osc.type = 'square';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.2, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.15);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   CANVAS DRAWING HELPERS
+────────────────────────────────────────────────────────────── */
+
+// Draw a pixelated sky gradient + clouds
+function drawBackground() {
+  const W = canvas.width, H = canvas.height;
+
+  // Transparent overlay so webcam is visible – sky tint only
+  ctx.fillStyle = 'rgba(60, 188, 252, ' + CANVAS_BG_ALPHA + ')';
+  ctx.fillRect(0, 0, W, H * (1 - GRASS_HEIGHT));
+
+  // Clouds
+  clouds.forEach(c => drawCloud(c));
+
+  // Grass band
+  const grassTop = H * (1 - GRASS_HEIGHT);
+  ctx.fillStyle = '#58D854';
+  ctx.fillRect(0, grassTop, W, H);
+
+  // Dark grass shadow row
+  ctx.fillStyle = '#008800';
+  ctx.fillRect(0, grassTop, W, 8);
+
+  // Pixel-art style grass blades (decorative row)
+  ctx.fillStyle = '#44BB44';
+  for (let x = 0; x < W; x += 8) {
+    ctx.fillRect(x, grassTop - 6, 4, 6);
+  }
+}
+
+// Simple boxy cloud drawn with rectangles (NES style)
+function drawCloud(c) {
+  ctx.fillStyle = 'rgba(252,252,252,0.85)';
+  const x = c.x, y = c.y, s = c.size;
+  // Main body
+  ctx.fillRect(x,       y + s*0.5, s * 2.2, s);
+  ctx.fillRect(x + s*0.4, y,       s * 1.4, s * 1.5);
+  ctx.fillRect(x + s,   y + s*0.25,s * 0.8, s * 1.25);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   DUCK DRAWING (pixel-art sprite via Canvas 2D)
+────────────────────────────────────────────────────────────── */
+function drawDuck(duck) {
+  const { x, y, type, facing, wingUp, hit, fallY, alpha } = duck;
+  const def = DUCK_TYPES[type];
+
+  ctx.save();
+  ctx.globalAlpha = alpha ?? 1;
+
+  // Flip sprite based on direction
+  const scaleX = facing === 'left' ? -1 : 1;
+  ctx.translate(x, y + (fallY || 0));
+  ctx.scale(scaleX, 1);
+
+  const S = duck.size;  // base size unit
+
+  if (hit) {
+    // Dead duck – spin and fall, feathers scatter
+    ctx.rotate(duck.deathAngle || 0);
+    drawDuckBody(0, 0, S, def, true);
+  } else {
+    drawDuckBody(0, 0, S, def, false, wingUp);
+  }
+
+  ctx.restore();
+
+  // Type label above duck (only while alive, not golden spam)
+  if (!hit && type !== 'normal') {
+    ctx.save();
+    ctx.fillStyle = type === 'golden' ? '#F8D800' : '#FC7460';
+    ctx.font = '7px "Press Start 2P"';
+    ctx.textAlign = 'center';
+    ctx.fillText(def.label, x, y - S * 1.5);
+    ctx.restore();
+  }
+}
+
+// Draw individual duck body parts
+function drawDuckBody(cx, cy, S, def, dead = false, wingUp = false) {
+  // Body
+  ctx.fillStyle = def.color;
+  ctx.fillRect(cx - S,     cy - S*0.4, S * 2,   S * 1.2);
+
+  // Belly
+  ctx.fillStyle = def.belly;
+  ctx.fillRect(cx - S*0.5, cy,         S * 1.2,  S * 0.7);
+
+  // Head
+  ctx.fillStyle = def.color;
+  ctx.fillRect(cx + S*0.6, cy - S*1.1, S * 1.1,  S * 1.0);
+
+  // Beak
+  ctx.fillStyle = '#F8A800';
+  ctx.fillRect(cx + S*1.7, cy - S*0.75, S*0.7, S*0.35);
+
+  // Eye
+  ctx.fillStyle = dead ? '#888' : '#000';
+  ctx.fillRect(cx + S*1.25, cy - S*0.9, S*0.3, S*0.3);
+
+  // Wing (animated)
+  ctx.fillStyle = def.wingColor;
+  if (wingUp) {
+    ctx.fillRect(cx - S*0.8, cy - S*1.1, S*1.6, S*0.5);
+  } else {
+    ctx.fillRect(cx - S*0.8, cy + S*0.3, S*1.6, S*0.5);
+  }
+
+  // Tail feathers
+  ctx.fillStyle = def.wingColor;
+  ctx.fillRect(cx - S*1.6, cy - S*0.5, S*0.8, S*0.8);
+
+  if (dead) {
+    // X eyes
+    ctx.fillStyle = '#FF0000';
+    ctx.fillRect(cx + S*1.1,  cy - S,     S*0.3, S*0.3);
+    ctx.fillRect(cx + S*1.4,  cy - S*0.7, S*0.3, S*0.3);
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   PARTICLE SYSTEM  (feathers on hit)
+────────────────────────────────────────────────────────────── */
+function spawnParticles(x, y, color) {
+  for (let i = 0; i < 10; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: -(Math.random() * 5 + 1),
+      life: 1,
+      color,
+      size: Math.random() * 5 + 3
+    });
+  }
+}
+
+function updateParticles(dt) {
+  particles = particles.filter(p => p.life > 0);
+  particles.forEach(p => {
+    p.x  += p.vx * dt * 60;
+    p.vy += 0.18 * dt * 60;  // gravity
+    p.y  += p.vy * dt * 60;
+    p.life -= 0.025 * dt * 60;
+  });
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle   = p.color;
+    // Feather-like rectangle
+    ctx.fillRect(p.x, p.y, p.size, p.size * 0.4);
+    ctx.globalAlpha = 1;
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────
+   SCORE POPUPS
+────────────────────────────────────────────────────────────── */
+function spawnScorePopup(x, y, points, type) {
+  const el = document.createElement('div');
+  el.className = 'score-popup';
+  el.textContent = '+' + points;
+  el.style.left  = x + 'px';
+  el.style.top   = y + 'px';
+  el.style.color = SCORE_COLORS[type] || '#FFF';
+  document.getElementById('game-container').appendChild(el);
+  scorePopups.push(el);
+  setTimeout(() => {
+    el.remove();
+    scorePopups = scorePopups.filter(p => p !== el);
+  }, 900);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   DUCK SPAWNING
+────────────────────────────────────────────────────────────── */
+function randomDuckType() {
+  const r = Math.random();
+  if (r < 0.55)  return 'normal';
+  if (r < 0.82)  return 'fast';
+  return 'golden';
+}
+
+function spawnDuck() {
+  if (gameState !== 'playing') return;
+
+  const W = canvas.width, H = canvas.height;
+  const type = randomDuckType();
+  const def  = DUCK_TYPES[type];
+
+  // Spawn on the left or right edge of the sky area
+  const fromLeft = Math.random() < 0.5;
+  const startX   = fromLeft ? -40 : W + 40;
+  const startY   = 80 + Math.random() * (H * (1 - GRASS_HEIGHT) - 160);
+
+  const baseSpeed = (W * 0.0018) + Math.random() * (W * 0.001);
+  const speed     = baseSpeed * def.speedMult;
+  const angle     = (Math.random() - 0.5) * 0.6;  // slight vertical drift
+
+  ducks.push({
+    id:        Math.random(),
+    type,
+    x:         startX,
+    y:         startY,
+    vx:        fromLeft ? speed : -speed,
+    vy:        Math.sin(angle) * speed * 0.5,
+    size:      18 + Math.random() * 8,
+    facing:    fromLeft ? 'right' : 'left',
+    wingUp:    false,
+    wingTimer: 0,
+    hit:       false,
+    fallY:     0,
+    fallVY:    0,
+    deathAngle:0,
+    deathSpin: (Math.random() - 0.5) * 0.15,
+    alpha:     1,
+    age:       0,
+    missedFly: false,   // true when time's up and duck escapes
+  });
+}
+
+function scheduleDuckSpawn() {
+  const delay = Math.max(800, DUCK_SPAWN_BASE - (GAME_DURATION - timeLeft) * 28);
+  spawnTimer = setTimeout(() => {
+    spawnDuck();
+    if (gameState === 'playing') scheduleDuckSpawn();
+  }, delay);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   COLLISION DETECTION
+────────────────────────────────────────────────────────────── */
+function checkCollisions() {
+  if (!fingerPos || !handVisible) return;
+
+  const fx = fingerPos.x, fy = fingerPos.y;
+
+  ducks.forEach(duck => {
+    if (duck.hit || duck.missedFly) return;
+
+    const S = duck.size;
+    const dx = fx - duck.x;
+    const dy = fy - duck.y;
+    const hitRadius = S * 2.2;
+
+    if (Math.abs(dx) < hitRadius && Math.abs(dy) < hitRadius) {
+      hitDuck(duck);
+    }
+  });
+}
+
+function hitDuck(duck) {
+  duck.hit      = true;
+  duck.fallVY   = -1;           // initial upward pop then gravity
+  duck.deathAngle = 0;
+
+  const def = DUCK_TYPES[duck.type];
+  score += def.points;
+  totalHits++;
+
+  updateHUD();
+
+  // FX
+  playShot();
+  setTimeout(() => playHit(duck.type), 60);
+  spawnParticles(duck.x, duck.y, def.wingColor);
+  spawnScorePopup(duck.x, duck.y - duck.size * 2, def.points, duck.type);
+
+  // Screen flash
+  hitFlash.style.opacity = '1';
+  setTimeout(() => { hitFlash.style.opacity = '0'; }, 80);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   GAME LOOP
+────────────────────────────────────────────────────────────── */
+let lastTime = 0;
+
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap dt
+  lastTime  = timestamp;
+
+  if (gameState !== 'playing') return;
+
+  const W = canvas.width, H = canvas.height;
+  const grassTop = H * (1 - GRASS_HEIGHT);
+
+  // Clear
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  drawBackground();
+
+  // Update + draw ducks
+  ducks = ducks.filter(duck => {
+    duck.age += dt;
+
+    if (duck.hit) {
+      // Death animation: bounce once then fall
+      duck.fallVY += 0.38 * dt * 60;      // gravity
+      duck.fallY  += duck.fallVY * dt * 60;
+      duck.deathAngle += duck.deathSpin * dt * 60;
+      duck.alpha  -= 0.008 * dt * 60;
+
+      if (duck.fallY > grassTop - duck.y + 20) {
+        // Land on grass briefly then fade
+        duck.fallVY = 0;
+        duck.alpha -= 0.025 * dt * 60;
+      }
+      if (duck.alpha <= 0) return false;  // remove from array
+
+    } else if (duck.missedFly) {
+      // Escape animation: fly off-screen quickly
+      duck.vy  -= 0.04 * dt * 60;  // fly upward
+      duck.x   += duck.vx * dt * 60 * 1.5;
+      duck.y   += duck.vy * dt * 60;
+      duck.alpha -= 0.01 * dt * 60;
+      if (duck.alpha <= 0 || duck.x < -100 || duck.x > W + 100) return false;
+
+    } else {
+      // Normal flight
+      duck.x += duck.vx * dt * 60;
+      duck.y += duck.vy * dt * 60;
+
+      // Bounce off top/bottom of sky
+      if (duck.y < 70 || duck.y > grassTop - 40) duck.vy *= -1;
+
+      // Wing flap
+      duck.wingTimer += dt;
+      if (duck.wingTimer > 0.18) {
+        duck.wingUp    = !duck.wingUp;
+        duck.wingTimer = 0;
+      }
+
+      // Mark as missed after timeout if still alive
+      if (duck.age > MISSED_DUCK_WAIT / 1000 && !duck.hit) {
+        duck.missedFly = true;
+      }
+
+      // Out of bounds (left/right) before timeout
+      if (duck.x < -100 || duck.x > W + 100) return false;
+    }
+
+    drawDuck(duck);
+    return true;
+  });
+
+  // Particles
+  updateParticles(dt);
+  drawParticles();
+
+  // Crosshair collision check each frame
+  checkCollisions();
+
+  // Move clouds slowly
+  clouds.forEach(c => {
+    c.x += c.speed * dt * 60;
+    if (c.x > W + 100) c.x = -200;
+  });
+
+  requestAnimationFrame(gameLoop);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   HUD UPDATE
+────────────────────────────────────────────────────────────── */
+function updateHUD() {
+  scoreDisplay.textContent = 'SCORE: ' + String(score).padStart(6, '0');
+  timerDisplay.textContent = 'TIME: ' + String(Math.max(0, timeLeft)).padStart(2, '0');
+}
+
+/* ──────────────────────────────────────────────────────────────
+   GAME STATE MACHINE
+────────────────────────────────────────────────────────────── */
+function showStart() {
+  gameState = 'start';
+  startScreen.style.display    = 'flex';
+  countdownScreen.style.display = 'none';
+  gameoverScreen.style.display  = 'none';
+  hudEl.style.display           = 'none';
+  crosshairEl.style.display     = 'none';
+  trackingStatus.style.display  = 'none';
+}
+
+function startCountdown() {
+  initAudio();
+  gameState = 'countdown';
+  startScreen.style.display    = 'none';
+  countdownScreen.style.display = 'flex';
+  countdownVal = 3;
+  countdownNum.textContent = countdownVal;
+  playBeep(660);
+
+  const interval = setInterval(() => {
+    countdownVal--;
+    if (countdownVal <= 0) {
+      clearInterval(interval);
+      countdownScreen.style.display = 'none';
+      startGame();
+    } else {
+      countdownNum.textContent = countdownVal;
+      playBeep(countdownVal === 1 ? 880 : 660);
+    }
+  }, 1000);
+}
+
+function startGame() {
+  gameState   = 'playing';
+  score       = 0;
+  totalHits   = 0;
+  timeLeft    = GAME_DURATION;
+  ducks       = [];
+  particles   = [];
+  scorePopups.forEach(p => p.remove());
+  scorePopups = [];
+
+  hudEl.style.display          = 'flex';
+  crosshairEl.style.display    = 'block';
+  trackingStatus.style.display = 'block';
+  gameoverScreen.style.display  = 'none';
+
+  updateHUD();
+  initClouds();
+  scheduleDuckSpawn();
+
+  lastTime = performance.now();
+  requestAnimationFrame(gameLoop);
+
+  // Countdown timer (every second)
+  gameTimer = setInterval(() => {
+    timeLeft--;
+    updateHUD();
+    if (timeLeft <= 0) endGame();
+  }, 1000);
+}
+
+function endGame() {
+  gameState = 'gameover';
+  clearTimeout(spawnTimer);
+  clearInterval(gameTimer);
+
+  hudEl.style.display          = 'none';
+  crosshairEl.style.display    = 'none';
+  trackingStatus.style.display = 'none';
+  gameoverScreen.style.display = 'flex';
+
+  finalScore.textContent  = String(score).padStart(6, '0');
+  finalHits.textContent   = totalHits + ' DUCK' + (totalHits !== 1 ? 'S' : '') + ' HIT';
+}
+
+/* ──────────────────────────────────────────────────────────────
+   CLOUD INITIALISATION
+────────────────────────────────────────────────────────────── */
+function initClouds() {
+  clouds = [];
+  const W = canvas.width, H = canvas.height;
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      x:     Math.random() * W,
+      y:     40 + Math.random() * (H * 0.3),
+      size:  30 + Math.random() * 40,
+      speed: 0.3 + Math.random() * 0.4,
+    });
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   MEDIAPIPE HANDS SETUP
+────────────────────────────────────────────────────────────── */
+async function initHandTracking() {
+  // Request webcam access
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    });
+    webcamEl.srcObject = stream;
+    await webcamEl.play();
+  } catch (err) {
+    console.warn('Camera access denied or unavailable:', err);
+    cameraPrompt.textContent =
+      '⚠ Camera not available. Allow camera access and reload the page.\n' +
+      'You can still play – the crosshair will be mouse-controlled.';
+    cameraPrompt.style.display = 'block';
+    enableMouseFallback();
+    return;
+  }
+
+  // Load MediaPipe Hands via CDN
+  // The library exposes window.Hands after the script loads
+  const hands = new window.Hands({
+    locateFile: file =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands:      1,
+    modelComplexity:  0,   // 0 = lite, faster
+    minDetectionConfidence: 0.72,
+    minTrackingConfidence:  0.60,
+  });
+
+  hands.onResults(onHandResults);
+
+  // Camera helper – sends frames to MediaPipe
+  const camera = new window.Camera(webcamEl, {
+    onFrame: async () => { await hands.send({ image: webcamEl }); },
+    width: 640,
+    height: 480,
+  });
+  camera.start();
+}
+
+/* Called every frame by MediaPipe with hand landmark data */
+function onHandResults(results) {
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    handVisible = true;
+    trackingStatus.textContent = '● HAND DETECTED';
+    trackingStatus.className = 'active';
+
+    // Landmark 8 = index finger tip
+    const lm = results.multiHandLandmarks[0][8];
+
+    // MediaPipe gives normalised (0-1) coords
+    // Webcam is mirrored, so flip X back
+    const rawX = (1 - lm.x) * canvas.width;
+    const rawY = lm.y * canvas.height;
+
+    fingerPos = { x: rawX, y: rawY };
+
+    // Move DOM crosshair overlay
+    crosshairEl.style.left = rawX + 'px';
+    crosshairEl.style.top  = rawY + 'px';
+
+  } else {
+    handVisible = false;
+    fingerPos   = null;
+    trackingStatus.textContent = '○ NO HAND';
+    trackingStatus.className = 'inactive';
+  }
+}
+
+/* ── Mouse fallback when no camera ─────────────────────────── */
+function enableMouseFallback() {
+  document.addEventListener('mousemove', e => {
+    if (gameState !== 'playing') return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / rect.width;
+    const scaleY = canvas.height / rect.height;
+    fingerPos = {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top)  * scaleY,
+    };
+    handVisible = true;
+    crosshairEl.style.left = e.clientX + 'px';
+    crosshairEl.style.top  = e.clientY + 'px';
+  });
+  // Click to fire in mouse mode (game normally fires continuously by proximity)
+  document.addEventListener('click', e => {
+    if (gameState === 'playing') {
+      playShot();
+    }
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────
+   CANVAS RESIZE HANDLER
+────────────────────────────────────────────────────────────── */
+function resizeCanvas() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   INIT
+────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  canvas = $('game-canvas');
+  ctx    = canvas.getContext('2d');
+
+  resizeCanvas();
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    if (gameState === 'start') {
+      // Redraw idle background on start screen
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  });
+
+  // Render a static idle background on the start screen
+  initClouds();
+  drawBackground();
+
+  // Button events
+  $('play-btn').addEventListener('click', startCountdown);
+  $('restart-btn').addEventListener('click', startCountdown);
+  $('end-btn').addEventListener('click', () => {
+    if (gameState === 'playing') endGame();
+  });
+
+  // Start hand tracking immediately so camera is ready
+  initHandTracking();
+
+  // Show start screen
+  showStart();
+
+  // Idle cloud drift on start screen
+  (function idleLoop(ts) {
+    if (gameState === 'start') {
+      const dt = 0.016;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBackground();
+      clouds.forEach(c => { c.x += c.speed * dt * 60; if (c.x > canvas.width + 100) c.x = -200; });
+      requestAnimationFrame(idleLoop);
+    }
+  })(0);
+});
+
+/* ============================================================
+   Duck Hunt - Retro NES-Inspired Style Sheet
+   ============================================================ */
+
+/* Import NES-style pixel font */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* NES palette */
+  --nes-black:   #000000;
+  --nes-white:   #FCFCFC;
+  --nes-sky:     #3CBCFC;   /* classic NES sky blue */
+  --nes-grass:   #58D854;   /* bright NES green */
+  --nes-dark-gr: #008800;   /* shadow green */
+  --nes-yellow:  #F8D800;   /* golden duck */
+  --nes-red:     #D80000;   /* hit flash */
+  --nes-orange:  #FC7460;   /* fast duck */
+  --nes-brown:   #884400;   /* normal duck body */
+  --nes-ui-bg:   #000044;   /* HUD dark navy */
+  --nes-score:   #F8D800;   /* score text */
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: 'Press Start 2P', monospace;
+  image-rendering: pixelated;
+}
+
+/* ── Game Container ───────────────────────────────────────── */
+#game-container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Webcam Feed (background layer) ──────────────────────── */
+#webcam {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  /* Mirror the feed so it feels natural */
+  transform: scaleX(-1);
+  opacity: 0.55;
+  z-index: 0;
+}
+
+/* ── Game Canvas (ducks, sky, grass overlay) ─────────────── */
+#game-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  z-index: 1;
+}
+
+/* ── Crosshair ───────────────────────────────────────────── */
+#crosshair {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  /* Hidden until game starts */
+  display: none;
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: '';
+  position: absolute;
+  background: #FF0000;
+  box-shadow: 0 0 4px rgba(255,0,0,0.8);
+}
+/* Horizontal bar */
+#crosshair::before {
+  top: 50%; left: 0;
+  width: 100%; height: 3px;
+  transform: translateY(-50%);
+}
+/* Vertical bar */
+#crosshair::after {
+  left: 50%; top: 0;
+  width: 3px; height: 100%;
+  transform: translateX(-50%);
+}
+
+/* Centre dot */
+#crosshair .dot {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 6px; height: 6px;
+  background: #FF0000;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+
+/* ── HUD ──────────────────────────────────────────────────── */
+#hud {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 56px;
+  background: var(--nes-ui-bg);
+  border-bottom: 4px solid var(--nes-black);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 20;
+  display: none; /* shown when game starts */
+}
+
+#score-display {
+  color: var(--nes-score);
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+#timer-display {
+  color: var(--nes-white);
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+#hud-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+#lives-display {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* End Game button – compact HUD variant */
+#end-btn {
+  font-size: 9px;
+  padding: 7px 14px;
+  background: #AA0000;
+  color: var(--nes-white);
+  box-shadow: 3px 3px 0 #000, -1px -1px 0 #660000;
+  letter-spacing: 1px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#end-btn:hover {
+  background: var(--nes-red);
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #000, -1px -1px 0 #660000;
+}
+
+#end-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 #000;
+}
+
+.life-icon {
+  width: 22px;
+  height: 18px;
+  display: inline-block;
+}
+
+/* ── Overlay Screens ─────────────────────────────────────── */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 20px;
+}
+
+/* ── START SCREEN ─────────────────────────────────────────── */
+#start-screen {
+  background: linear-gradient(
+    to bottom,
+    #1a0a00 0%,
+    #3d1a00 30%,
+    #001a3d 60%,
+    #000820 100%
+  );
+}
+
+.title-box {
+  border: 4px solid var(--nes-yellow);
+  padding: 28px 40px;
+  text-align: center;
+  background: rgba(0,0,0,0.6);
+  box-shadow: 6px 6px 0 #000, 0 0 30px rgba(248,216,0,0.3);
+  margin-bottom: 32px;
+  max-width: 560px;
+}
+
+.title-main {
+  font-size: clamp(28px, 5vw, 48px);
+  color: var(--nes-yellow);
+  text-shadow: 4px 4px 0 #884400, -2px -2px 0 #000;
+  line-height: 1.3;
+  margin-bottom: 8px;
+  letter-spacing: 2px;
+}
+
+.title-sub {
+  font-size: clamp(10px, 1.8vw, 14px);
+  color: var(--nes-white);
+  margin-top: 12px;
+  letter-spacing: 1px;
+}
+
+.instructions {
+  background: rgba(0,0,68,0.85);
+  border: 3px solid #3CBCFC;
+  padding: 20px 32px;
+  margin-bottom: 28px;
+  max-width: 520px;
+  text-align: left;
+}
+
+.instructions p {
+  color: var(--nes-white);
+  font-size: 9px;
+  line-height: 2;
+  margin-bottom: 6px;
+}
+
+.instructions .point-list {
+  margin-top: 8px;
+}
+
+.instructions .point-list div {
+  font-size: 8px;
+  margin-bottom: 4px;
+}
+
+.point-normal  { color: #FCFCFC; }
+.point-fast    { color: var(--nes-orange); }
+.point-golden  { color: var(--nes-yellow); }
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.nes-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+  color: var(--nes-black);
+  background: var(--nes-yellow);
+  border: none;
+  padding: 14px 32px;
+  cursor: pointer;
+  box-shadow: 4px 4px 0 #000, -2px -2px 0 #884400;
+  letter-spacing: 1px;
+  transition: transform 0.1s, box-shadow 0.1s;
+  text-transform: uppercase;
+  display: block;
+}
+
+.nes-btn:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 #000, -2px -2px 0 #884400;
+}
+
+.nes-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 #000;
+}
+
+.nes-btn.red {
+  background: var(--nes-red);
+  color: var(--nes-white);
+  box-shadow: 4px 4px 0 #000, -2px -2px 0 #660000;
+}
+
+/* ── COUNTDOWN SCREEN ────────────────────────────────────── */
+#countdown-screen {
+  background: rgba(0,0,0,0.45);
+  display: none;
+}
+
+#countdown-number {
+  font-size: clamp(80px, 18vw, 160px);
+  color: var(--nes-yellow);
+  text-shadow: 6px 6px 0 #884400, -3px -3px 0 #000;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* ── GAME OVER SCREEN ────────────────────────────────────── */
+#gameover-screen {
+  background: rgba(0,0,0,0.82);
+  display: none;
+}
+
+.gameover-box {
+  border: 4px solid var(--nes-red);
+  padding: 32px 44px;
+  text-align: center;
+  background: rgba(0,0,0,0.85);
+  box-shadow: 6px 6px 0 #000;
+  max-width: 460px;
+}
+
+.gameover-title {
+  font-size: clamp(22px, 4vw, 36px);
+  color: var(--nes-red);
+  text-shadow: 3px 3px 0 #660000;
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.gameover-score-label {
+  font-size: 9px;
+  color: #888;
+  margin-bottom: 6px;
+  letter-spacing: 2px;
+}
+
+.gameover-score-value {
+  font-size: clamp(28px, 5vw, 44px);
+  color: var(--nes-yellow);
+  text-shadow: 3px 3px 0 #884400;
+  margin-bottom: 8px;
+}
+
+.gameover-hits {
+  font-size: 8px;
+  color: var(--nes-white);
+  margin-bottom: 24px;
+  letter-spacing: 1px;
+  line-height: 2;
+}
+
+/* ── Flash effect on hit ─────────────────────────────────── */
+#hit-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.25);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 5;
+  transition: opacity 0.08s;
+}
+
+/* ── Camera permission prompt ────────────────────────────── */
+#camera-prompt {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  border: 2px solid var(--nes-sky);
+  color: var(--nes-white);
+  font-size: 8px;
+  padding: 10px 18px;
+  text-align: center;
+  z-index: 50;
+  max-width: 360px;
+  line-height: 1.8;
+  display: none;
+}
+
+/* ── Tracking status indicator ───────────────────────────── */
+#tracking-status {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  font-size: 7px;
+  color: #aaa;
+  z-index: 25;
+  display: none;
+}
+
+#tracking-status.active   { color: #44FF44; }
+#tracking-status.inactive { color: #FF4444; }
+
+/* ── Score popup text ────────────────────────────────────── */
+.score-popup {
+  position: absolute;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 13px;
+  font-weight: bold;
+  pointer-events: none;
+  z-index: 15;
+  text-shadow: 2px 2px 0 #000;
+  animation: floatUp 0.9s ease-out forwards;
+}
+
+@keyframes floatUp {
+  0%   { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-60px); }
+}
+
+/* ── Duck label badge (type indicator) ───────────────────── */
+.duck-label {
+  position: absolute;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 6px;
+  pointer-events: none;
+  z-index: 9;
+  white-space: nowrap;
+}
+
+/* ── Responsive tweaks ───────────────────────────────────── */
+@media (max-width: 480px) {
+  .title-box { padding: 18px 20px; }
+  .instructions { padding: 14px 18px; }
+  .nes-btn { font-size: 9px; padding: 12px 22px; }
+  #score-display, #timer-display { font-size: 9px; }
+  .gameover-box { padding: 22px 24px; }
+}
