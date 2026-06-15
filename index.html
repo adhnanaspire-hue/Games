@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<!--
+  ================================================================
+  DUCK HUNT – Hand-Gesture Edition
+  index.html – Main entry point
+
+  Dependencies loaded from CDN:
+    • MediaPipe Hands + Camera Utils (hand tracking)
+    • Press Start 2P (Google Fonts – pixel font)
+  Everything else is vanilla HTML / CSS / JS.
+
+  Mechanic: When the Reticle (index-finger tip) touches a duck,
+  the duck is shot and falls down with an animation.
+  ================================================================
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Duck Hunt – Hand-Gesture Edition</title>
+
+  <!-- Pixel font loaded via @import inside style.css -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!--
+    MediaPipe Hands CDN – must load BEFORE main.js so that
+    window.Hands and window.Camera are available.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"
+          crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <!-- ══════════════════════════════════════════════════════
+       GAME CONTAINER  (all layers live here)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="game-container">
+
+    <!-- LAYER 0 – Webcam feed (semi-transparent background) -->
+    <video id="webcam" autoplay playsinline muted
+           aria-label="Webcam feed used for hand tracking"></video>
+
+    <!-- LAYER 1 – Canvas: sky, clouds, grass, ducks -->
+    <canvas id="game-canvas" aria-label="Game canvas"></canvas>
+
+    <!-- LAYER 2 – White flash on duck hit -->
+    <div id="hit-flash" aria-hidden="true"></div>
+
+    <!-- LAYER 3 – Reticle (positioned in JS from index-finger tip) -->
+    <div id="reticle" aria-hidden="true">
+      <span class="reticle-dot"></span>
+    </div>
+
+    <!-- LAYER 4 – HUD: score | timer | duck icon | END button -->
+    <div id="hud" role="status" aria-live="polite">
+      <div id="score-display">SCORE: 000000</div>
+      <div id="timer-display">TIME: 60</div>
+      <div id="hud-right">
+        <!-- Decorative duck-icon (lives display) -->
+        <div id="lives-display" aria-label="Lives remaining">
+          <svg class="life-icon" viewBox="0 0 22 18" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="1"  y="6"  width="14" height="8"  fill="#884400"/>
+            <rect x="5"  y="8"  width="8"  height="5"  fill="#F0C060"/>
+            <rect x="11" y="3"  width="7"  height="6"  fill="#884400"/>
+            <rect x="18" y="5"  width="4"  height="2"  fill="#F8A800"/>
+            <rect x="13" y="4"  width="2"  height="2"  fill="#000"/>
+            <rect x="4"  y="1"  width="10" height="4"  fill="#228B22"/>
+          </svg>
+        </div>
+        <!-- End Game button – visible during play only -->
+        <button id="end-btn" class="nes-btn btn-red" aria-label="End current game">
+          ■ END
+        </button>
+      </div>
+    </div>
+
+    <!-- LAYER 5 – Hand-tracking status badge -->
+    <div id="tracking-status" aria-live="polite">○ NO HAND</div>
+
+    <!-- LAYER 6 – Camera permission / fallback notice -->
+    <div id="camera-prompt" role="alert"></div>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: START
+    ════════════════════════════════════════════════════════ -->
+    <section id="start-screen" class="screen" aria-label="Start screen">
+
+      <div class="title-box">
+        <!-- Pixel-art duck illustration -->
+        <svg width="80" height="60" viewBox="0 0 80 60"
+             xmlns="http://www.w3.org/2000/svg"
+             aria-hidden="true"
+             style="display:block;margin:0 auto 12px;">
+          <rect x="10" y="22" width="42" height="24" fill="#884400"/>
+          <rect x="20" y="30" width="28" height="14" fill="#F0C060"/>
+          <rect x="42" y="10" width="22" height="20" fill="#884400"/>
+          <rect x="64" y="20" width="12" height="6"  fill="#F8A800"/>
+          <rect x="57" y="13" width="6"  height="6"  fill="#000"/>
+          <rect x="10" y="14" width="30" height="10" fill="#228B22"/>
+          <rect x="2"  y="18" width="14" height="16" fill="#228B22"/>
+        </svg>
+
+        <div class="title-main">🦆 DUCK HUNT</div>
+        <div class="title-sub">HAND-GESTURE EDITION</div>
+      </div>
+
+      <!-- How-to-play card -->
+      <div class="instructions" role="note" aria-label="Game instructions">
+        <p>Point your index finger at ducks to shoot them!</p>
+        <p>The Reticle follows your fingertip — aim and hold it on a duck!</p>
+        <p>Allow camera access when prompted.</p>
+        <div class="point-list" aria-label="Duck point values">
+          <div class="point-normal">🦆 NORMAL DUCK  =  10 PTS</div>
+          <div class="point-fast">⚡ FAST DUCK    =  20 PTS</div>
+          <div class="point-golden">✨ GOLDEN DUCK  =  50 PTS</div>
+        </div>
+      </div>
+
+      <button id="play-btn" class="nes-btn" aria-label="Start the game">
+        ▶ PLAY
+      </button>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: COUNTDOWN  (3 → 2 → 1)
+    ════════════════════════════════════════════════════════ -->
+    <section id="countdown-screen" class="screen"
+             aria-label="Countdown" aria-live="assertive">
+      <div id="countdown-number" aria-live="assertive">3</div>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════
+         SCREEN: GAME OVER
+    ════════════════════════════════════════════════════════ -->
+    <section id="gameover-screen" class="screen" aria-label="Game over screen">
+      <div class="gameover-box">
+        <div class="gameover-title">GAME OVER!</div>
+        <div class="gameover-score-label">FINAL SCORE</div>
+        <div class="gameover-score-value" id="final-score">000000</div>
+        <div class="gameover-hits" id="final-hits">0 DUCKS HIT</div>
+        <button id="restart-btn" class="nes-btn btn-red" aria-label="Play again">
+          ↺ PLAY AGAIN
+        </button>
+      </div>
+    </section>
+
+  </div><!-- /#game-container -->
+
+  <!-- Game logic – deferred so the full DOM is ready first -->
+  <script src="main.js" defer></script>
+</body>
+</html>
